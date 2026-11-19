@@ -1,0 +1,347 @@
+{
+  "name": "LinkedIn Auto-Post (Notion → Claude → Telegram approval)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [ { "field": "weeks", "triggerAtDay": [2, 4], "triggerAtHour": 9 } ] }
+      },
+      "name": "tue,thu 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [-48, 96]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "dataSourceId": { "__rl": true, "mode": "id", "value": "YOUR_NOTION_DATA_SOURCE_ID", "cachedResultName": "LinkedIn Content" },
+        "limit": 1,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": { "conditions": [ { "key": "Status|select", "condition": "equals", "optionValue": "Idea" } ] },
+        "options": { "sort": { "sortValue": [ { "timestamp": true, "key": "created_time", "direction": "ascending" } ] } }
+      },
+      "name": "Idea",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [96, -16],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "getMarkdown",
+        "pageId": { "__rl": true, "mode": "url", "value": "https://www.notion.so/YOUR_PROMPT_PAGE_ID" }
+      },
+      "name": "prompt template",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [96, 240],
+      "executeOnce": true
+    },
+    {
+      "parameters": { "mode": "chooseBranch", "useDataOfInput": "1" },
+      "name": "Idea+template",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [288, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "combinator": "and",
+          "conditions": [ { "leftValue": "={{ $json.id ? 'yes' : 'no' }}", "operator": { "type": "string", "operation": "equals" }, "rightValue": "yes" } ]
+        },
+        "options": {}
+      },
+      "name": "Idea?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [464, 272]
+    },
+    {
+      "parameters": {},
+      "name": "current idea",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [704, 256]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "value": "claude-sonnet-5", "mode": "list", "cachedResultName": "claude-sonnet-5" },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ \"Pillar: \" + $(\"current idea\").item.json[\"property_pillar\"] + \"\\n\" + \"Language: \" + $(\"current idea\").item.json[\"property_language\"] + \"\\n\" + \"Topic: \" + $(\"current idea\").item.json[\"property_topic\"] + \"\\n\" + \"Note: \" + ($(\"current idea\").item.json[\"property_note\"] || \"none\") + \"\\n\\n\" + \"Write a LinkedIn post draft on this topic, strictly following the style guide in the system prompt.\" }}"
+            }
+          ]
+        },
+        "options": { "includeMergedResponse": true, "system": "={{ $(\"prompt template\").item.json.markdown }}", "maxTokens": 900 }
+      },
+      "name": "draft generation",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [384, 128]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "draft-text", "name": "draftText", "value": "={{ $json.merged_response ?? $json.content ?? $json.text ?? $json.output ?? \"\" }}", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "extract text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [720, 128]
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "message": "={{ \"📋 LinkedIn post draft\\n\\nPillar: \" + $(\"current idea\").item.json[\"property_pillar\"] + \"\\nTopic: \" + $(\"current idea\").item.json[\"property_topic\"] + \"\\n\\n\" + $json.draftText + \"\\n\\n— — —\\nReply \\\"ok\\\" (or \\\"yes\\\") to approve as is.\\nOr send your own edited text — it will be used instead of the draft.\" }}",
+        "responseType": "freeText",
+        "options": {}
+      },
+      "name": "send draft and wait for response",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [944, 128]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "combinator": "or",
+          "conditions": [
+            { "leftValue": "={{ $json.data.text.trim().toLowerCase() }}", "operator": { "type": "string", "operation": "equals" }, "rightValue": "ok" },
+            { "leftValue": "={{ $json.data.text.trim().toLowerCase() }}", "operator": { "type": "string", "operation": "equals" }, "rightValue": "yes" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1152, 128]
+    },
+    {
+      "parameters": {
+        "assignments": { "assignments": [ { "id": "final-text-approved", "name": "finalText", "value": "={{ $('extract text').item.json.draftText }}", "type": "string" } ] },
+        "options": {}
+      },
+      "name": "final text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1440, -16]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "mode": "id", "value": "={{ $('current idea').item.json.id }}" },
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Status|select", "selectValue": "Ready" },
+            { "key": "Post Draft|rich_text", "textContent": "={{ $json.finalText }}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Notion: mark ready (as is)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [1664, -16]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "✅ Approved! Notion status set to \"Ready\", draft saved unchanged.",
+        "additionalFields": {}
+      },
+      "name": "confirm",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1888, -16]
+    },
+    {
+      "parameters": {
+        "assignments": { "assignments": [ { "id": "final-text-edited", "name": "finalText", "value": "={{ $json.data.text }}", "type": "string" } ] },
+        "options": {}
+      },
+      "name": "final text edited",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1440, 224]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "mode": "id", "value": "={{ $('current idea').item.json.id }}" },
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Status|select", "selectValue": "Ready" },
+            { "key": "Post Draft|rich_text", "textContent": "={{ $json.finalText }}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Notion: mark as Ready (edited)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [1680, 224]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "✅ Edited version accepted! Notion status set to \"Ready\" with your text.",
+        "additionalFields": {}
+      },
+      "name": "confirm edited text",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1904, 224]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "dataSourceId": { "__rl": true, "mode": "id", "value": "YOUR_NOTION_DATA_SOURCE_ID", "cachedResultName": "LinkedIn Content" },
+        "limit": 20,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": { "conditions": [ { "key": "Status|select", "condition": "does_not_equal", "optionValue": "Idea" } ] },
+        "options": { "sort": { "sortValue": [ { "timestamp": true, "key": "last_edited_time", "direction": "descending" } ] } }
+      },
+      "name": "chat history",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [704, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "hist-text", "name": "historyText", "type": "string", "value": "={{ $input.all().length ? $input.all().map(i => \"- [\" + i.json.property_pillar + \"] \" + i.json.property_topic).join(\"\\n\") : \"(no published topics yet)\" }}" },
+            { "id": "last-lang", "name": "lastLanguage", "type": "string", "value": "={{ $input.all().length ? ($input.all()[0].json.property_language || '').toString().toUpperCase() : '' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "topic history",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [912, 400]
+    },
+    {
+      "parameters": {
+        "query": "AI automation trends for small business 2026 n8n workflow ideas",
+        "count": 5,
+        "additionalParameters": {}
+      },
+      "name": "Brave Search: trends",
+      "type": "@brave/n8n-nodes-brave-search.braveSearch",
+      "typeVersion": 1.1,
+      "position": [1104, 400]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "value": "claude-sonnet-5", "mode": "list", "cachedResultName": "claude-sonnet-5" },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ \"Topics already used (do not repeat):\\n\" + $(\"topic history\").item.json.historyText + \"\\n\\nFresh context from web search (for inspiration, do not copy verbatim):\\n\" + JSON.stringify($json).slice(0,1500) + \"\\n\\nPropose the next LinkedIn post topic. Pick one of the 4 pillars (preferably not the one used last in the list above), write a concrete topic and a short context note. Reply with ONE JSON object only, no markdown or explanations: {\\\"pillar\\\":\\\"...\\\",\\\"topic\\\":\\\"...\\\",\\\"language\\\":\\\"...\\\",\\\"note\\\":\\\"...\\\"}. pillar must be exactly one of: Founder/cases, Skills for recruiters, Idea of the week, GitHub/projects. language MUST be one of: EN, PT, EN/PT.\" }}"
+            }
+          ]
+        },
+        "options": { "includeMergedResponse": true, "system": "={{ $(\"prompt template\").item.json.markdown }}", "maxTokens": 500 }
+      },
+      "name": "brainstorm topic",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [1296, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "gen-pillar", "name": "pillar", "type": "string", "value": "={{ JSON.parse($json.merged_response.replace(/```json/g,'').replace(/```/g,'').trim()).pillar }}" },
+            { "id": "gen-topic", "name": "topic", "type": "string", "value": "={{ JSON.parse($json.merged_response.replace(/```json/g,'').replace(/```/g,'').trim()).topic }}" },
+            { "id": "gen-language", "name": "language", "type": "string", "value": "={{ (() => { const lastLang = ($(\"topic history\").item.json.lastLanguage || '').toUpperCase(); return lastLang.includes('EN') ? 'PT' : 'EN'; })() }}" },
+            { "id": "gen-note", "name": "note", "type": "string", "value": "={{ JSON.parse($json.merged_response.replace(/```json/g,'').replace(/```/g,'').trim()).note }}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "analyze generated idea",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1584, 400]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "dataSourceId": { "__rl": true, "mode": "id", "value": "YOUR_NOTION_DATA_SOURCE_ID", "cachedResultName": "LinkedIn Content" },
+        "title": "={{ $json.topic }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Pillar|select", "selectValue": "={{ $json.pillar }}" },
+            { "key": "Language|select", "selectValue": "={{ $json.language }}" },
+            { "key": "Status|select", "selectValue": "Idea" },
+            { "key": "Note|rich_text", "textContent": "={{ $json.note }}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "generate idea",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 3,
+      "position": [1792, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "nq-id", "name": "id", "type": "string", "value": "={{ $json.id }}" },
+            { "id": "nq-pillar", "name": "property_pillar", "type": "string", "value": "={{ $(\"analyze generated idea\").item.json.pillar }}" },
+            { "id": "nq-topic", "name": "property_topic", "type": "string", "value": "={{ $(\"analyze generated idea\").item.json.topic }}" },
+            { "id": "nq-language", "name": "property_language", "type": "string", "value": "={{ $(\"analyze generated idea\").item.json.language }}" },
+            { "id": "nq-note", "name": "property_note", "type": "string", "value": "={{ $(\"analyze generated idea\").item.json.note }}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "idea queue format",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [1984, 400]
+    }
+  ],
+  "connections": {
+    "tue,thu 09:00": { "main": [ [ { "node": "Idea", "type": "main", "index": 0 }, { "node": "prompt template", "type": "main", "index": 0 } ] ] },
+    "Idea": { "main": [ [ { "node": "Idea+template", "type": "main", "index": 0 } ] ] },
+    "prompt template": { "main": [ [ { "node": "Idea+template", "type": "main", "index": 1 } ] ] },
+    "Idea+template": { "main": [ [ { "node": "Idea?", "type": "main", "index": 0 } ] ] },
+    "Idea?": { "main": [ [ { "node": "current idea", "type": "main", "index": 0 } ], [ { "node": "chat history", "type": "main", "index": 0 } ] ] },
+    "current idea": { "main": [ [ { "node": "draft generation", "type": "main", "index": 0 } ] ] },
+    "draft generation": { "main": [ [ { "node": "extract text", "type": "main", "index": 0 } ] ] },
+    "extract text": { "main": [ [ { "node": "send draft and wait for response", "type": "main", "index": 0 } ] ] },
+    "send draft and wait for response": { "main": [ [ { "node": "approved?", "type": "main", "index": 0 } ] ] },
+    "approved?": { "main": [ [ { "node": "final text", "type": "main", "index": 0 } ], [ { "node": "final text edited", "type": "main", "index": 0 } ] ] },
+    "final text": { "main": [ [ { "node": "Notion: mark ready (as is)", "type": "main", "index": 0 } ] ] },
+    "Notion: mark ready (as is)": { "main": [ [ { "node": "confirm", "type": "main", "index": 0 } ] ] },
+    "final text edited": { "main": [ [ { "node": "Notion: mark as Ready (edited)", "type": "main", "index": 0 } ] ] },
+    "Notion: mark as Ready (edited)": { "main": [ [ { "node": "confirm edited text", "type": "main", "index": 0 } ] ] },
+    "chat history": { "main": [ [ { "node": "topic history", "type": "main", "index": 0 } ] ] },
+    "topic history": { "main": [ [ { "node": "Brave Search: trends", "type": "main", "index": 0 } ] ] },
+    "Brave Search: trends": { "main": [ [ { "node": "brainstorm topic", "type": "main", "index": 0 } ] ] },
+    "brainstorm topic": { "main": [ [ { "node": "analyze generated idea", "type": "main", "index": 0 } ] ] },
+    "analyze generated idea": { "main": [ [ { "node": "generate idea", "type": "main", "index": 0 } ] ] },
+    "generate idea": { "main": [ [ { "node": "idea queue format", "type": "main", "index": 0 } ] ] },
+    "idea queue format": { "main": [ [ { "node": "current idea", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
